@@ -1,6 +1,6 @@
 using System;
 
-public class Transaction
+public class Transaction : IModel
 {
     public string id {get; set;}
     public decimal amount {get; set;}

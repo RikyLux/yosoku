@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
 
-public class Order
+public class Order: IModel
 {
     public string id {get; set;}
+    public string projectId {get; set;}
     public string number {get; set;}
     public string currency {get; set;}
     public List<OrderDiscount> discounts {get; set;}
@@ -47,7 +48,6 @@ public class OrderVariant
     public string id {get; set;}
     public string name {get; set;}
     public string sku {get; set;}
-    public string inventoryItemId {get; set;}
 }
 
 public class OrderCustomer
@@ -61,4 +61,20 @@ public class OrderLocation
 {
     public string id {get; set;}
     public string name {get; set;}
+}
+
+public class Product : IModel
+{
+    public string id {get; set;}
+    public string projectId {get; set;}
+    public string name {get; set;}
+    public List<ProductVariant> variants {get; set;}
+}
+
+public class ProductVariant
+{
+    public string id {get; set;}
+    public string name {get; set;}
+    public string sku {get; set;}
+    public string inventoryItemId {get; set;}
 }

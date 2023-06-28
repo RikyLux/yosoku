@@ -8,12 +8,10 @@ public class CosmosProvider
 
     private static string databaseId = "Yosoku";
     public static string projectsContainerId = "Projects";
+    public static string ordersContainerId = "Orders";
+    public static string productsContainerId = "Products";
+    public static string inventoryContainerId = "Inventory";
     public static string dataPipelineContainerId = "DataPipelines";
-    public static string datasetsContainerId = "Datasets";
-    public static string usersContainerId = "Users";
-    public static string companiesContainerId = "Companies";
-    public static string embeddingsContainerId = "Embeddings";
-    public static string bgJobsContainerId = "BGJobs";
 
     public static CosmosClient BuildClient()
     {

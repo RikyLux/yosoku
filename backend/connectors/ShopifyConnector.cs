@@ -55,7 +55,7 @@ public class ShopifyConnector : BaseCosmos, IConnector
         throw new System.NotImplementedException();
     }
 
-    public async Task<List<object>> ReadData(DataPipeline pipeline)
+    public async Task<ReadTimeDataResult> ReadTimeData(DataPipeline pipeline)
     {
         string shop = dataSource.metadata["shop"];
         string accessToken = dataSource.metadata["token"];
@@ -67,18 +67,16 @@ public class ShopifyConnector : BaseCosmos, IConnector
             url += "&created_at_max=" + to;
         url += "&limit=250";
 
+        // Prende i dati degli ordini
         var allOrders = await this.GetOrders(url, accessToken);
-        var orders = allOrders.Where(x => x.financial_status == "paid" || x.financial_status == "partially_paid");
-        var ordersByDate = orders.GroupBy(x => Config.UTCDate(x.created_at));
-
-        //TODO: prendi prodotti, varianti, inventory item e associali ai dati dell'ordine
-
+        var orders = allOrders.Where(x => x.financial_status == "paid" || x.financial_status == "partially_paid").ToList();
         List<Order> myOrders = new List<Order>();
         foreach (var order in orders)
         {
             var myOrder = new Order()
             {
                 id = order.id.ToString(),
+                projectId = pipeline.projectId,
                 number = order.order_number.ToString(),
                 currency = order.currency,
                 createdAt = Config.UTCDate(order.created_at),
@@ -114,14 +112,141 @@ public class ShopifyConnector : BaseCosmos, IConnector
             myOrders.Add(myOrder);
         }
 
-        //TODO: import inventory data
+        // Prende i dati dei prodotti e varianti
+        var productIds = myOrders.SelectMany(x => x.lineItems.Select(k => k.product.id)).Distinct().ToList();
+        var products = await this.GetProducts(productIds, shop, accessToken);
+        var myProducts = new Dictionary<string, Product>();
+        var myVariants = new Dictionary<string, ProductVariant>();
+        foreach(var product in products)
+        {
+            var myProduct = new Product()
+            {
+                id = product.id.ToString(),
+                projectId = pipeline.projectId,
+                name = product.title
+            };
+            foreach (var variant in product.variants)
+            {
+                var myVariant = new ProductVariant()
+                {
+                    id = variant.id.ToString(),
+                    name = variant.title,
+                    sku = variant.sku,
+                    inventoryItemId = variant.inventory_item_id.ToString()
+                };
+                myVariants.Add(myVariant.id, myVariant);
+                myProduct.variants.Add(myVariant);
+            }
+            myProducts.Add(myProduct.id, myProduct);
+        }
 
-        return myOrders.Cast<object>().ToList();
+        // Applica i dati dei prodotti completi agli ordini
+        foreach (var order in myOrders)
+        {
+            foreach (var line in order.lineItems)
+            {
+                line.product.name = myProducts[line.product.id].name;
+                line.variant.name = myVariants[line.variant.id].name;
+            }
+        }
+
+        return new ReadTimeDataResult()
+        {
+            orders = myOrders,
+            products = myProducts.Select(x => x.Value).ToList()
+        };
     }
 
-    public async Task<List<object>> ImportData(DataPipeline pipeline, List<object> newData)
+    public Task<ImportDataResult> ImportTimeData(DataPipeline pipeline, ReadTimeDataResult newData)
     {
-        return newData;
+        throw new NotImplementedException();
+    }
+
+    public async Task<ReadRegistryDataResult> ReadRegistryData(DataPipeline pipeline)
+    {
+        string shop = dataSource.metadata["shop"];
+        string accessToken = dataSource.metadata["token"];
+
+        // Prende i dati dei prodotti e varianti
+        var products = await this.GetProducts(shop, accessToken);
+        var myProducts = new Dictionary<string, Product>();
+        var myVariants = new Dictionary<string, ProductVariant>();
+        foreach(var product in products)
+        {
+            var myProduct = new Product()
+            {
+                id = product.id.ToString(),
+                projectId = pipeline.projectId,
+                name = product.title
+            };
+            foreach (var variant in product.variants)
+            {
+                var myVariant = new ProductVariant()
+                {
+                    id = variant.id.ToString(),
+                    name = variant.title,
+                    sku = variant.sku,
+                    inventoryItemId = variant.inventory_item_id.ToString()
+                };
+                myVariants.Add(myVariant.id, myVariant);
+                myProduct.variants.Add(myVariant);
+            }
+            myProducts.Add(myProduct.id, myProduct);
+        }
+
+        // Prende i dati dell'inventario
+        var inventoryItemsIds = myProducts.SelectMany(x => x.Value.variants.Select(k => k.inventoryItemId)).Distinct().ToList();
+        var inventoryItems = await this.GetInventoryItems(inventoryItemsIds, shop, accessToken);
+        var myInventoryItems = new Dictionary<string, InventoryItem>();
+        foreach (var invItem in inventoryItems)
+        {
+            myInventoryItems.Add(invItem.id.ToString(), new InventoryItem()
+            {
+                id = invItem.id.ToString(),
+                sku = invItem.sku,
+                cost = Helpers.ToNumber(invItem.cost)
+            });
+        }
+
+        var locations = await this.GetLocations(shop, accessToken);
+        var myLocations = new Dictionary<string, Location>();
+        foreach (var location in locations)
+        {
+            myLocations.Add(location.id.ToString(), new Location()
+            {
+                id = location.id.ToString(),
+                name = location.name,
+                address = location.address1 + " " + location.address2,
+                city = location.city,
+                country = location.country
+            });
+        }
+
+        var locationIds = myLocations.Select(x => x.Key).ToList();
+        var inventoryLevels = await this.GetInventoryLevels(locationIds, shop, accessToken);
+        var myInventoryLevels = new List<InventoryLevel>();
+        foreach (var level in inventoryLevels)
+        {
+            var myLevel = new InventoryLevel()
+            {
+                id = level.location_id.ToString() + level.inventory_item_id.ToString(),
+                available = level.available,
+                inventoryItem = myInventoryItems[level.inventory_item_id.ToString()],
+                location = myLocations[level.location_id.ToString()],
+                updatedAt = Config.UTCDate(level.updated_at)
+            };
+        }
+
+        return new ReadRegistryDataResult()
+        {
+            products = myProducts.Select(x => x.Value).ToList(),
+            inventory = myInventoryLevels
+        };
+    }
+
+    public Task<ImportDataResult> ImportRegistryData(DataPipeline pipeline, ReadRegistryDataResult newData)
+    {
+        throw new NotImplementedException();
     }
 
     public async Task<DataSource> RefreshTokens()
@@ -156,6 +281,8 @@ public class ShopifyConnector : BaseCosmos, IConnector
         public string scope {get; set;}
     }
 
+    #region API
+    
     private async Task<List<ShopifyOrder>> GetOrders(string link, string accessToken)
     {
         var response = await WebApi.GET<OrdersResponse>(link, new Dictionary<string, string>()
@@ -186,6 +313,64 @@ public class ShopifyConnector : BaseCosmos, IConnector
         }
         else return new List<ShopifyOrder>();
     }
+
+    private async Task<List<ShopifyProduct>> GetProducts(string shop, string accessToken)
+    {
+        string url = string.Format("https://{0}/admin/api/2023-04/products.json", shop);
+        var response = await WebApi.GET<GetProductsResponse>(url, new Dictionary<string, string>()
+        {
+            { "X-Shopify-Access-Token", accessToken }
+        });
+
+        if(response.statusCode == HttpStatusCode.OK)
+            return response.data.products;
+        else
+            return new List<ShopifyProduct>();
+    }
+
+    private async Task<List<ShopifyInventoryItem>> GetInventoryItems(List<string> ids, string shop, string accessToken)
+    {
+        string url = string.Format("https://{0}/admin/api/2023-04/inventory_items.json?ids={0}", shop, string.Join(",", ids));
+        var response = await WebApi.GET<InventoryItemResponse>(url, new Dictionary<string, string>()
+        {
+            { "X-Shopify-Access-Token", accessToken }
+        });
+
+        if(response.statusCode == HttpStatusCode.OK)
+            return response.data.inventory_items;
+        else
+            return new List<ShopifyInventoryItem>();
+    }
+
+    private async Task<List<ShopifyLocation>> GetLocations(string shop, string accessToken)
+    {
+        string url = string.Format("https://{0}/admin/api/2023-04/locations.json", shop);
+        var response = await WebApi.GET<LocationResponse>(url, new Dictionary<string, string>()
+        {
+            { "X-Shopify-Access-Token", accessToken }
+        });
+
+        if(response.statusCode == HttpStatusCode.OK)
+            return response.data.locations;
+        else
+            return new List<ShopifyLocation>();
+    }
+
+    private async Task<List<ShopifyInventoryLevel>> GetInventoryLevels(List<string> locationIds, string shop, string accessToken)
+    {
+        string url = string.Format("https://{0}/admin/api/2023-04/inventory_levels.json?location_ids={0}", shop, string.Join(",", locationIds));
+        var response = await WebApi.GET<InventoryLevelResponse>(url, new Dictionary<string, string>()
+        {
+            { "X-Shopify-Access-Token", accessToken }
+        });
+
+        if(response.statusCode == HttpStatusCode.OK)
+            return response.data.inventory_levels;
+        else
+            return new List<ShopifyInventoryLevel>();
+    }
+
+    #endregion
 
     private string ExtractSite(string referrer)
     {
@@ -730,6 +915,185 @@ public class ShopifyConnector : BaseCosmos, IConnector
         public PresentmentMoney presentment_money { get; set; }
     }
 
+
+
+    public class Image
+    {
+        public int id { get; set; }
+        public int product_id { get; set; }
+        public int position { get; set; }
+        public DateTime created_at { get; set; }
+        public DateTime updated_at { get; set; }
+        public object alt { get; set; }
+        public int width { get; set; }
+        public int height { get; set; }
+        public string src { get; set; }
+        public List<int> variant_ids { get; set; }
+        public string admin_graphql_api_id { get; set; }
+    }
+
+    public class Image2
+    {
+        public int id { get; set; }
+        public int product_id { get; set; }
+        public int position { get; set; }
+        public DateTime created_at { get; set; }
+        public DateTime updated_at { get; set; }
+        public object alt { get; set; }
+        public int width { get; set; }
+        public int height { get; set; }
+        public string src { get; set; }
+        public List<object> variant_ids { get; set; }
+        public string admin_graphql_api_id { get; set; }
+    }
+
+    public class Option
+    {
+        public int id { get; set; }
+        public int product_id { get; set; }
+        public string name { get; set; }
+        public int position { get; set; }
+        public List<string> values { get; set; }
+    }
+
+    public class PresentmentPrice
+    {
+        public Price price { get; set; }
+        public object compare_at_price { get; set; }
+    }
+
+    public class Price
+    {
+        public string amount { get; set; }
+        public string currency_code { get; set; }
+    }
+
+    public class ShopifyProduct
+    {
+        public int id { get; set; }
+        public string title { get; set; }
+        public string body_html { get; set; }
+        public string vendor { get; set; }
+        public string product_type { get; set; }
+        public DateTime created_at { get; set; }
+        public string handle { get; set; }
+        public DateTime updated_at { get; set; }
+        public DateTime published_at { get; set; }
+        public object template_suffix { get; set; }
+        public string published_scope { get; set; }
+        public string tags { get; set; }
+        public string admin_graphql_api_id { get; set; }
+        public List<Variant> variants { get; set; }
+        public List<Option> options { get; set; }
+        public List<Image> images { get; set; }
+        public Image image { get; set; }
+    }
+
+    public class GetProductsResponse
+    {
+        public List<ShopifyProduct> products { get; set; }
+    }
+
+    public class Variant
+    {
+        public int id { get; set; }
+        public int product_id { get; set; }
+        public string title { get; set; }
+        public string price { get; set; }
+        public string sku { get; set; }
+        public int position { get; set; }
+        public string inventory_policy { get; set; }
+        public object compare_at_price { get; set; }
+        public string fulfillment_service { get; set; }
+        public string inventory_management { get; set; }
+        public string option1 { get; set; }
+        public object option2 { get; set; }
+        public object option3 { get; set; }
+        public DateTime created_at { get; set; }
+        public DateTime updated_at { get; set; }
+        public bool taxable { get; set; }
+        public string barcode { get; set; }
+        public int grams { get; set; }
+        public int? image_id { get; set; }
+        public double weight { get; set; }
+        public string weight_unit { get; set; }
+        public int inventory_item_id { get; set; }
+        public int inventory_quantity { get; set; }
+        public int old_inventory_quantity { get; set; }
+        public List<PresentmentPrice> presentment_prices { get; set; }
+        public bool requires_shipping { get; set; }
+        public string admin_graphql_api_id { get; set; }
+    }
+
+
+
+    // Root myDeserializedClass = JsonConvert.DeserializeObject<Root>(myJsonResponse);
+    public class ShopifyInventoryItem
+    {
+        public int id { get; set; }
+        public string sku { get; set; }
+        public DateTime created_at { get; set; }
+        public DateTime updated_at { get; set; }
+        public bool requires_shipping { get; set; }
+        public string cost { get; set; }
+        public object country_code_of_origin { get; set; }
+        public object province_code_of_origin { get; set; }
+        public object harmonized_system_code { get; set; }
+        public bool tracked { get; set; }
+        public List<object> country_harmonized_system_codes { get; set; }
+        public string admin_graphql_api_id { get; set; }
+    }
+
+    public class InventoryItemResponse
+    {
+        public List<ShopifyInventoryItem> inventory_items { get; set; }
+    }
+
+
+
+    public class ShopifyLocation
+    {
+        public int id { get; set; }
+        public string name { get; set; }
+        public string address1 { get; set; }
+        public object address2 { get; set; }
+        public string city { get; set; }
+        public string zip { get; set; }
+        public string province { get; set; }
+        public string country { get; set; }
+        public object phone { get; set; }
+        public DateTime created_at { get; set; }
+        public DateTime updated_at { get; set; }
+        public string country_code { get; set; }
+        public string country_name { get; set; }
+        public string province_code { get; set; }
+        public bool legacy { get; set; }
+        public bool active { get; set; }
+        public string admin_graphql_api_id { get; set; }
+        public string localized_country_name { get; set; }
+        public string localized_province_name { get; set; }
+    }
+
+    public class LocationResponse
+    {
+        public List<ShopifyLocation> locations { get; set; }
+    }
+
+
+
+    public class ShopifyInventoryLevel
+    {
+        public int inventory_item_id { get; set; }
+        public int location_id { get; set; }
+        public int available { get; set; }
+        public DateTime updated_at { get; set; }
+        public string admin_graphql_api_id { get; set; }
+    }
+
+    public class InventoryLevelResponse
+    {
+        public List<ShopifyInventoryLevel> inventory_levels { get; set; }
+    }
 
     #endregion
 }

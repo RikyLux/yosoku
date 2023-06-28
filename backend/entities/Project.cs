@@ -13,6 +13,17 @@ public class Project : IModel
     public string _etag {get; set;}
 }
 
+public class DataSource
+{
+    public string id {get; set;}
+    public string name {get; set;}
+    public string source {get; set;}
+    public DateTime lastRefresh { get; set; }
+    public Dictionary<string, string> metadata {get; set;}
+    public bool isFirstImport { get; set; }
+    public bool isOnline { get; set; }
+}
+
 public class TimeSettings
 {
     public string granularity {get; set;}

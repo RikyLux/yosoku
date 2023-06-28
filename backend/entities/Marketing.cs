@@ -1,6 +1,6 @@
 using System;
 
-public class MarketingPerformance
+public class PaidAdsPerformance : IModel
 {
     public string id {get; set;}
     public Campaign campaign {get; set;}
